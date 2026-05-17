@@ -1,6 +1,64 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
+function getStoredKey() {
+  try { return localStorage.getItem("sp-api-key") || ""; } catch { return ""; }
+}
+
+function ApiKeyGate({ onKey }) {
+  const [val, setVal] = useState("");
+  const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const key = val.trim();
+    if (!key.startsWith("sk-ant-")) { setError("That doesn't look right — Anthropic keys start with sk-ant-"); return; }
+    setTesting(true);
+    setError("");
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }),
+      });
+      if (!res.ok) { setError("Key didn't work — double-check it and try again."); return; }
+      localStorage.setItem("sp-api-key", key);
+      onKey(key);
+    } catch { setError("Network error — check your connection."); }
+    finally { setTesting(false); }
+  }
+
+  return (
+    <div style={{ fontFamily: "Georgia, serif", minHeight: "100dvh", background: "#fafaf7", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 400, width: "100%" }}>
+        <div style={{ fontSize: 40, textAlign: "center", marginBottom: 12 }}>🇦🇷</div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, textAlign: "center", marginBottom: 6, color: "#1a1a1a" }}>Argentine Spanish Practice</h1>
+        <p style={{ fontSize: 14, color: "#888", textAlign: "center", marginBottom: 28, lineHeight: 1.6 }}>
+          To get started, paste your Anthropic API key below.<br />
+          It stays on your device — never sent anywhere else.
+        </p>
+        <form onSubmit={handleSubmit}>
+          <input
+            type="password"
+            value={val}
+            onChange={e => setVal(e.target.value)}
+            placeholder="sk-ant-..."
+            autoComplete="off"
+            style={{ width: "100%", padding: "14px 16px", borderRadius: 12, border: "1.5px solid #d8d8d0", fontSize: 16, fontFamily: "monospace", outline: "none", boxSizing: "border-box", marginBottom: 10, background: "#fff", color: "#1a1a1a" }}
+          />
+          {error && <div style={{ color: "#dc2626", fontSize: 13, marginBottom: 10, lineHeight: 1.5 }}>{error}</div>}
+          <button type="submit" disabled={!val.trim() || testing}
+            style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: val.trim() && !testing ? "#1a1a1a" : "#e8e8e0", color: val.trim() && !testing ? "#fff" : "#aaa", fontSize: 16, fontWeight: 600, cursor: val.trim() && !testing ? "pointer" : "not-allowed", transition: "background 0.2s" }}>
+            {testing ? "Checking..." : "Let's go →"}
+          </button>
+        </form>
+        <p style={{ fontSize: 12, color: "#bbb", textAlign: "center", marginTop: 20, lineHeight: 1.6 }}>
+          Get a key at <strong>console.anthropic.com</strong>
+        </p>
+      </div>
+    </div>
+  );
+}
 
 const SPEAKERS = {
   friend: {
@@ -68,18 +126,15 @@ CRITICAL: Respond ONLY with valid JSON, no markdown, no backticks, nothing else.
 Score 1-10 based on grammar accuracy, use of vos (not tú), and Argentine vocabulary authenticity. If they write in English give score 2 but still respond in Spanish.`;
 }
 
-const API_HEADERS = {
-  "Content-Type": "application/json",
-  "x-api-key": API_KEY,
-  "anthropic-version": "2023-06-01",
-  "anthropic-dangerous-direct-browser-access": "true",
-};
+function makeHeaders(key) {
+  return { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+}
 
-async function fetchClaude(system, userText, history) {
+async function fetchClaude(system, userText, history, key) {
   const messages = [...history, { role: "user", content: userText }];
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: API_HEADERS,
+    headers: makeHeaders(key),
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1024, system, messages }),
   });
   const raw = await res.text();
@@ -90,10 +145,10 @@ async function fetchClaude(system, userText, history) {
   catch { return { parsed: { response: content, score: null }, newHistory: [...messages, { role: "assistant", content }] }; }
 }
 
-async function translateWord(word, sentence) {
+async function translateWord(word, sentence, key) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: API_HEADERS,
+    headers: makeHeaders(key),
     body: JSON.stringify({
       model: "claude-sonnet-4-6", max_tokens: 120,
       system: `You are a Spanish-English translator specializing in Argentine Rioplatense Spanish. Given a word and its sentence context, reply ONLY with a JSON object: {"translation":"English translation","note":"1 short note about Argentine usage if relevant, otherwise null"}. No markdown, no backticks.`,
@@ -375,7 +430,7 @@ function StatsTab({ scores, vocab, corrections }) {
 }
 
 // ── Settings tab ───────────────────────────────────────────────────
-function SettingsTab({ difficulty, setDifficulty, systemAddendum, setSystemAddendum }) {
+function SettingsTab({ difficulty, setDifficulty, systemAddendum, setSystemAddendum, onClearKey }) {
   return (
     <div style={{ padding: "16px 0" }}>
       <div style={{ marginBottom: 20 }}>
@@ -399,12 +454,25 @@ function SettingsTab({ difficulty, setDifficulty, systemAddendum, setSystemAdden
           style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e8e8e0", fontSize: 16, fontFamily: "Georgia, serif", resize: "vertical", outline: "none", color: "#333", background: "#fff", boxSizing: "border-box" }}
         />
       </div>
+      <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid #e8e8e0" }}>
+        <button onClick={onClearKey}
+          style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", cursor: "pointer", fontSize: 13, width: "100%", textAlign: "left" }}>
+          🔑 Change API key
+        </button>
+      </div>
     </div>
   );
 }
 
 // ── Main App ───────────────────────────────────────────────────────
 export default function App() {
+  const [apiKey, setApiKey] = useState(getStoredKey);
+  if (!apiKey) return <ApiKeyGate onKey={setApiKey} />;
+
+  return <Chat apiKey={apiKey} onClearKey={() => { localStorage.removeItem("sp-api-key"); setApiKey(""); }} />;
+}
+
+function Chat({ apiKey, onClearKey }) {
   const isMobile = useIsMobile();
 
   const [speakerId, setSpeakerId] = useState("friend");
@@ -468,10 +536,10 @@ export default function App() {
 
   const handleTranslate = useCallback(async (word, sentence) => {
     if (translationCache[word]) return translationCache[word];
-    const result = await translateWord(word, sentence);
+    const result = await translateWord(word, sentence, apiKey);
     setTranslationCache(prev => ({ ...prev, [word]: result }));
     return result;
-  }, [translationCache]);
+  }, [translationCache, apiKey]);
 
   async function handleMobileTranslate(word, sentence) {
     if (mobileTranslation?.word === word) { setMobileTranslation(null); setMobileTooltip(null); return; }
@@ -505,7 +573,7 @@ export default function App() {
     setMessages(prev => [...prev, { role: "user", text }]);
     try {
       const sys = buildSystem(speaker, difficulty) + (systemAddendum ? `\n\nADDITIONAL INSTRUCTIONS: ${systemAddendum}` : "");
-      const { parsed, newHistory } = await fetchClaude(sys, text, history);
+      const { parsed, newHistory } = await fetchClaude(sys, text, history, apiKey);
       setHistory(newHistory);
       if (parsed.score != null) setScores(prev => [...prev, parsed.score]);
       if (parsed.new_word?.word) {
@@ -711,7 +779,7 @@ export default function App() {
 
       {activeTab === "vocab" && <VocabTab vocab={vocab} corrections={corrections} />}
       {activeTab === "stats" && <StatsTab scores={scores} vocab={vocab} corrections={corrections} />}
-      {activeTab === "settings" && <SettingsTab difficulty={difficulty} setDifficulty={setDifficulty} systemAddendum={systemAddendum} setSystemAddendum={setSystemAddendum} />}
+      {activeTab === "settings" && <SettingsTab difficulty={difficulty} setDifficulty={setDifficulty} systemAddendum={systemAddendum} setSystemAddendum={setSystemAddendum} onClearKey={onClearKey} />}
     </div>
   );
 }
