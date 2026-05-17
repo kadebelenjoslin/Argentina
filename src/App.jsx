@@ -118,7 +118,60 @@ function useStorage(key, defaultVal) {
   return [val, save];
 }
 
-function ClickableText({ text, translationCache, onTranslate }) {
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth < 640);
+  useEffect(() => {
+    const check = () => setMobile(window.innerWidth < 640);
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  return mobile;
+}
+
+// ── Translation overlay (mobile: fixed bottom sheet, desktop: tooltip) ──
+function TranslationOverlay({ word, tooltip, loading, onDismiss, isMobile, anchorRef }) {
+  if (!word) return null;
+
+  if (isMobile) {
+    return (
+      <div
+        onClick={onDismiss}
+        style={{
+          position: "fixed", inset: 0, zIndex: 200,
+          display: "flex", flexDirection: "column", justifyContent: "flex-end",
+        }}>
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            background: "#1e293b", color: "#fff",
+            borderRadius: "16px 16px 0 0",
+            padding: "20px 24px",
+            paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))",
+            boxShadow: "0 -8px 32px rgba(0,0,0,0.35)",
+          }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+            <span style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#60a5fa" }}>{word}</span>
+            <button onClick={onDismiss} style={{ background: "none", border: "none", color: "#64748b", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 0 0 16px" }}>✕</button>
+          </div>
+          {loading
+            ? <div style={{ fontSize: 15, color: "#94a3b8" }}>Translating...</div>
+            : tooltip
+              ? <>
+                  <div style={{ fontSize: 22, fontWeight: 600, marginBottom: tooltip.note ? 8 : 0 }}>{tooltip.translation}</div>
+                  {tooltip.note && <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.5 }}>{tooltip.note}</div>}
+                </>
+              : null}
+        </div>
+      </div>
+    );
+  }
+
+  // Desktop floating tooltip — rendered via portal-like absolute inside the word span
+  return null;
+}
+
+// ── Clickable word component ─────────────────────────────────────
+function ClickableText({ text, translationCache, onTranslate, isMobile, onMobileTranslate }) {
   const [activeWord, setActiveWord] = useState(null);
   const [tooltip, setTooltip] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -129,6 +182,13 @@ function ClickableText({ text, translationCache, onTranslate }) {
     e.stopPropagation();
     const clean = word.replace(/[¿¡.,!?;:"""''()\-]/g, "").toLowerCase();
     if (!clean || clean.length < 2) return;
+
+    if (isMobile) {
+      // On mobile, delegate to parent to show bottom sheet
+      onMobileTranslate(clean, text);
+      return;
+    }
+
     if (activeWord === clean) { setActiveWord(null); setTooltip(null); return; }
     setActiveWord(clean);
     if (translationCache[clean]) { setTooltip(translationCache[clean]); return; }
@@ -142,17 +202,18 @@ function ClickableText({ text, translationCache, onTranslate }) {
   }
 
   useEffect(() => {
+    if (isMobile) return;
     function dismiss() { setActiveWord(null); setTooltip(null); }
     document.addEventListener("click", dismiss);
     return () => document.removeEventListener("click", dismiss);
-  }, []);
+  }, [isMobile]);
 
   return (
     <span style={{ lineHeight: 1.7 }}>
       {words.map((w, i) => {
         if (/^\s+$/.test(w)) return <span key={i}>{w}</span>;
         const clean = w.replace(/[¿¡.,!?;:"""''()\-]/g, "").toLowerCase();
-        const isActive = activeWord === clean;
+        const isActive = !isMobile && activeWord === clean;
         return (
           <span key={i} style={{ position: "relative", display: "inline" }}>
             <span
@@ -167,6 +228,7 @@ function ClickableText({ text, translationCache, onTranslate }) {
               }}>
               {w}
             </span>
+            {/* Desktop tooltip */}
             {isActive && (
               <span onClick={e => e.stopPropagation()} style={{
                 position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
@@ -191,6 +253,7 @@ function ClickableText({ text, translationCache, onTranslate }) {
   );
 }
 
+// ── Score panel ───────────────────────────────────────────────────
 function ScorePanel({ rating }) {
   const [showSuggested, setShowSuggested] = useState(false);
   const scoreColor = rating.score >= 8 ? "#4ade80" : rating.score >= 5 ? "#f59e0b" : "#f87171";
@@ -235,6 +298,7 @@ function ScorePanel({ rating }) {
   );
 }
 
+// ── Vocab tab ─────────────────────────────────────────────────────
 function VocabTab({ vocab, corrections }) {
   return (
     <div style={{ padding: "16px 0" }}>
@@ -272,6 +336,7 @@ function VocabTab({ vocab, corrections }) {
   );
 }
 
+// ── Stats tab ─────────────────────────────────────────────────────
 function StatsTab({ scores, vocab, corrections }) {
   const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : "—";
   const best = scores.length ? Math.max(...scores) : "—";
@@ -309,6 +374,7 @@ function StatsTab({ scores, vocab, corrections }) {
   );
 }
 
+// ── Settings tab ───────────────────────────────────────────────────
 function SettingsTab({ difficulty, setDifficulty, systemAddendum, setSystemAddendum }) {
   return (
     <div style={{ padding: "16px 0" }}>
@@ -330,14 +396,17 @@ function SettingsTab({ difficulty, setDifficulty, systemAddendum, setSystemAdden
         <textarea value={systemAddendum} onChange={e => setSystemAddendum(e.target.value)}
           placeholder='e.g. "Focus on teaching me food vocabulary" or "Use more slang"'
           rows={4}
-          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e8e8e0", fontSize: 13, fontFamily: "Georgia, serif", resize: "vertical", outline: "none", color: "#333", background: "#fff", boxSizing: "border-box" }}
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e8e8e0", fontSize: 16, fontFamily: "Georgia, serif", resize: "vertical", outline: "none", color: "#333", background: "#fff", boxSizing: "border-box" }}
         />
       </div>
     </div>
   );
 }
 
+// ── Main App ───────────────────────────────────────────────────────
 export default function App() {
+  const isMobile = useIsMobile();
+
   const [speakerId, setSpeakerId] = useState("friend");
   const [messages, setMessages] = useState([]);
   const [history, setHistory] = useState([]);
@@ -353,6 +422,11 @@ export default function App() {
   const [vocab, setVocab] = useStorage("sp-vocab", []);
   const [corrections, setCorrections] = useStorage("sp-corrections", []);
   const [scores, setScores] = useStorage("sp-scores", []);
+
+  // Mobile translation sheet state
+  const [mobileTranslation, setMobileTranslation] = useState(null); // { word, sentence }
+  const [mobileTooltip, setMobileTooltip] = useState(null);
+  const [mobileLoading, setMobileLoading] = useState(false);
 
   const chatRef = useRef(null);
   const inputRef = useRef(null);
@@ -398,6 +472,19 @@ export default function App() {
     setTranslationCache(prev => ({ ...prev, [word]: result }));
     return result;
   }, [translationCache]);
+
+  async function handleMobileTranslate(word, sentence) {
+    if (mobileTranslation?.word === word) { setMobileTranslation(null); setMobileTooltip(null); return; }
+    setMobileTranslation({ word, sentence });
+    setMobileTooltip(translationCache[word] || null);
+    if (translationCache[word]) return;
+    setMobileLoading(true);
+    try {
+      const result = await handleTranslate(word, sentence);
+      setMobileTooltip(result);
+    } catch { setMobileTooltip({ translation: "Translation unavailable", note: null }); }
+    finally { setMobileLoading(false); }
+  }
 
   function switchSpeaker(id) {
     if (id === speakerId) return;
@@ -460,64 +547,111 @@ export default function App() {
     if (talking) return `${speaker.name} is speaking...`;
     if (status === "no-mic") return "Mic unavailable — type instead";
     if (status.startsWith("mic-err")) return "Mic error: " + status.replace("mic-err-", "");
-    return "Click any Spanish word to translate it";
+    return isMobile ? "Tap any Spanish word to translate" : "Click any Spanish word to translate";
   };
 
   const avgScore = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : null;
   const tabs = ["chat", "vocab", "stats", "settings"];
-  const tabLabels = { chat: "Chat", vocab: `Vocab (${vocab.length})`, stats: "Stats", settings: "Settings" };
+  const tabLabels = { chat: "Chat", vocab: `Vocab (${vocab.length})`, stats: "Stats", settings: "⚙️" };
+
+  const clickableProps = { translationCache, onTranslate: handleTranslate, isMobile, onMobileTranslate: handleMobileTranslate };
 
   return (
-    <div style={{ fontFamily: "Georgia, serif", maxWidth: 640, margin: "0 auto", padding: "20px 16px", background: "#fafaf7", minHeight: "100vh" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 16 }}>
+    <div style={{
+      fontFamily: "Georgia, serif",
+      maxWidth: 640,
+      margin: "0 auto",
+      padding: isMobile ? "12px 12px 0" : "20px 16px",
+      background: "#fafaf7",
+      minHeight: "100dvh",
+      display: "flex",
+      flexDirection: "column",
+    }}>
+
+      {/* Mobile translation bottom sheet */}
+      <TranslationOverlay
+        word={mobileTranslation?.word}
+        tooltip={mobileTooltip}
+        loading={mobileLoading}
+        isMobile={isMobile}
+        onDismiss={() => { setMobileTranslation(null); setMobileTooltip(null); }}
+      />
+
+      {/* Speaker selector — 3 cols on mobile, 6 on desktop */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "repeat(3, 1fr)" : "repeat(6, 1fr)",
+        gap: isMobile ? 8 : 6,
+        marginBottom: 12,
+      }}>
         {Object.values(SPEAKERS).map(s => (
           <button key={s.id} onClick={() => switchSpeaker(s.id)}
-            style={{ padding: "8px 4px", borderRadius: 10, border: speakerId === s.id ? `2px solid ${s.accent}` : "1px solid #e8e8e0", background: speakerId === s.id ? s.bg : "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-            <span style={{ fontSize: 20 }}>{s.emoji}</span>
-            <span style={{ fontSize: 10, fontFamily: "monospace", color: speakerId === s.id ? s.accent : "#888", fontWeight: speakerId === s.id ? 600 : 400 }}>{s.name}</span>
+            style={{
+              padding: isMobile ? "10px 4px" : "8px 4px",
+              borderRadius: 10,
+              border: speakerId === s.id ? `2px solid ${s.accent}` : "1px solid #e8e8e0",
+              background: speakerId === s.id ? s.bg : "#fff",
+              cursor: "pointer",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+              minHeight: 60,
+            }}>
+            <span style={{ fontSize: isMobile ? 24 : 20 }}>{s.emoji}</span>
+            <span style={{ fontSize: isMobile ? 11 : 10, fontFamily: "monospace", color: speakerId === s.id ? s.accent : "#888", fontWeight: speakerId === s.id ? 600 : 400 }}>{s.name}</span>
           </button>
         ))}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, padding: "10px 14px", background: speaker.bg, borderRadius: 12 }}>
+      {/* Speaker header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, padding: "10px 14px", background: speaker.bg, borderRadius: 12 }}>
         <span style={{ fontSize: 28 }}>{speaker.emoji}</span>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 600, color: "#fff" }}>{speaker.name}</div>
           <div style={{ fontSize: 12, color: speaker.accent, fontFamily: "monospace" }}>{speaker.role}</div>
         </div>
         {avgScore && (
-          <div style={{ textAlign: "right" }}>
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: speaker.accent }}>{avgScore}</div>
-            <div style={{ fontSize: 10, color: "#aaa", fontFamily: "monospace" }}>avg score</div>
+            <div style={{ fontSize: 10, color: "#aaa", fontFamily: "monospace" }}>avg</div>
           </div>
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 2, marginBottom: 14, background: "#f0efe8", borderRadius: 10, padding: 3 }}>
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "#f0efe8", borderRadius: 10, padding: 3 }}>
         {tabs.map(t => (
           <button key={t} onClick={() => setActiveTab(t)}
-            style={{ flex: 1, padding: "6px 4px", borderRadius: 8, border: "none", background: activeTab === t ? "#fff" : "transparent", color: activeTab === t ? "#1a1a1a" : "#888", fontSize: 12, fontFamily: "monospace", cursor: "pointer", fontWeight: activeTab === t ? 600 : 400 }}>
+            style={{ flex: 1, padding: isMobile ? "8px 4px" : "6px 4px", borderRadius: 8, border: "none", background: activeTab === t ? "#fff" : "transparent", color: activeTab === t ? "#1a1a1a" : "#888", fontSize: 12, fontFamily: "monospace", cursor: "pointer", fontWeight: activeTab === t ? 600 : 400 }}>
             {tabLabels[t]}
           </button>
         ))}
       </div>
 
+      {/* Chat tab */}
       {activeTab === "chat" && (
-        <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+          {/* Topic chips — horizontal scroll on mobile */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" }}>
             {TOPICS[speakerId].map(t => (
               <button key={t} onClick={() => handleInput(t)} disabled={busy}
-                style={{ fontSize: 12, fontFamily: "monospace", padding: "4px 10px", borderRadius: 20, border: "1px solid #d8d8d0", background: "#fff", color: "#666", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.45 : 1 }}>
+                style={{ fontSize: 12, fontFamily: "monospace", padding: "6px 12px", borderRadius: 20, border: "1px solid #d8d8d0", background: "#fff", color: "#666", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.45 : 1, whiteSpace: "nowrap", flexShrink: 0 }}>
                 {t}
               </button>
             ))}
           </div>
 
-          <div ref={chatRef} style={{ border: "1px solid #e8e8e0", borderRadius: 12, background: "#f4f4f0", padding: 14, minHeight: 180, maxHeight: 310, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, marginBottom: 10 }}>
+          {/* Chat window */}
+          <div ref={chatRef} style={{
+            border: "1px solid #e8e8e0", borderRadius: 12, background: "#f4f4f0",
+            padding: 14, flex: 1,
+            minHeight: isMobile ? 200 : 180,
+            maxHeight: isMobile ? "38dvh" : 310,
+            overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, marginBottom: 10,
+            WebkitOverflowScrolling: "touch",
+          }}>
             {messages.length === 0 ? (
               <div style={{ color: "#bbb", fontSize: 13, fontFamily: "monospace", textAlign: "center", padding: "2rem 0" }}>
                 {speaker.bio}<br /><br />
-                <span style={{ fontSize: 12 }}>💡 Click any Spanish word to see its translation</span><br />
+                <span style={{ fontSize: 12 }}>💡 {isMobile ? "Tap" : "Click"} any Spanish word to translate</span><br />
                 Tap a topic above or type something 👇
               </div>
             ) : messages.map((m, i) => {
@@ -526,13 +660,11 @@ export default function App() {
                 <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 4, maxWidth: "88%", alignSelf: isUser ? "flex-end" : "flex-start" }}>
                   <div style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace" }}>{isUser ? "you" : speaker.name.toLowerCase()}</div>
                   <div style={{ padding: "10px 14px", borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: isUser ? speaker.bg : "#fff", color: isUser ? "#fff" : "#1a1a1a", fontSize: 15, lineHeight: 1.6, border: isUser ? "none" : "1px solid #e8e8e0" }}>
-                    {isUser ? m.text : (
-                      <ClickableText text={m.text} translationCache={translationCache} onTranslate={handleTranslate} />
-                    )}
+                    {isUser ? m.text : <ClickableText text={m.text} {...clickableProps} />}
                   </div>
                   {m.question && (
                     <div style={{ padding: "8px 12px", borderRadius: "4px 16px 16px 16px", background: "#f0f9ff", border: "1px solid #bae6fd", fontSize: 14, color: "#0369a1" }}>
-                      <ClickableText text={"❓ " + m.question} translationCache={translationCache} onTranslate={handleTranslate} />
+                      <ClickableText text={"❓ " + m.question} {...clickableProps} />
                     </div>
                   )}
                   {m.rating && <ScorePanel rating={m.rating} />}
@@ -546,33 +678,35 @@ export default function App() {
             )}
           </div>
 
+          {/* Status bar */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, minHeight: 18 }}>
             <div style={{ fontSize: 12, color: "#aaa", fontFamily: "monospace", flex: 1 }}>{statusText()}</div>
             {talking && <button onClick={resetTalking} style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 8px", borderRadius: 6, border: "1px solid #e8e8e0", background: "#fff", color: "#999", cursor: "pointer" }}>stop ✕</button>}
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          {/* Input row */}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", paddingBottom: `calc(12px + env(safe-area-inset-bottom, 0px))` }}>
             <textarea ref={inputRef} value={inputText}
               onChange={e => setInputText(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInput(inputText); } }}
               disabled={busy}
-              placeholder="Escribí en español... (Enter to send)"
+              placeholder="Escribí en español..."
               rows={2}
-              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: "1px solid #d8d8d0", background: "#fff", fontSize: 14, fontFamily: "Georgia, serif", resize: "none", outline: "none", color: "#1a1a1a", lineHeight: 1.5, opacity: busy ? 0.6 : 1 }}
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: "1px solid #d8d8d0", background: "#fff", fontSize: 16, fontFamily: "Georgia, serif", resize: "none", outline: "none", color: "#1a1a1a", lineHeight: 1.5, opacity: busy ? 0.6 : 1 }}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <button onClick={() => handleInput(inputText)} disabled={busy || !inputText.trim()}
-                style={{ width: 44, height: 44, borderRadius: 10, border: "none", background: inputText.trim() && !busy ? speaker.bg : "#e8e8e0", color: inputText.trim() && !busy ? "#fff" : "#aaa", cursor: busy || !inputText.trim() ? "not-allowed" : "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                style={{ width: 48, height: 48, borderRadius: 12, border: "none", background: inputText.trim() && !busy ? speaker.bg : "#e8e8e0", color: inputText.trim() && !busy ? "#fff" : "#aaa", cursor: busy || !inputText.trim() ? "not-allowed" : "pointer", fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 ↑
               </button>
               <button onClick={toggleMic} disabled={busy}
-                style={{ width: 44, height: 44, borderRadius: 10, border: listening ? "2px solid #f59e0b" : "1px solid #d8d8d0", background: listening ? "#fff8eb" : "#fff", cursor: busy ? "not-allowed" : "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", opacity: busy ? 0.45 : 1 }}>
+                style={{ width: 48, height: 48, borderRadius: 12, border: listening ? "2px solid #f59e0b" : "1px solid #d8d8d0", background: listening ? "#fff8eb" : "#fff", cursor: busy ? "not-allowed" : "pointer", fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", opacity: busy ? 0.45 : 1 }}>
                 🎙️
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: "#ccc", fontFamily: "monospace", marginTop: 5 }}>Enter to send · Shift+Enter for new line</div>
-        </>
+          {!isMobile && <div style={{ fontSize: 11, color: "#ccc", fontFamily: "monospace", marginBottom: 8 }}>Enter to send · Shift+Enter for new line</div>}
+        </div>
       )}
 
       {activeTab === "vocab" && <VocabTab vocab={vocab} corrections={corrections} />}
